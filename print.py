@@ -5,7 +5,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium import webdriver
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, NoAlertPresentException
 from webdriver_manager.chrome import ChromeDriverManager
 import re
 import time
@@ -13,8 +13,8 @@ import os
 import pyautogui
 from pywinauto.application import Application
 from pywinauto.backend import element_class
-
 import click
+
 class shadowDOM :
     def __init__(self, driver:webdriver.Chrome) :
         self.driver = driver
@@ -43,21 +43,25 @@ class shadowDOM :
         print(f"{text} has echo click")
 
 def imprimir(driver:webdriver.Chrome, src:str, strxpath:str, atras=True):
-    wiat = WebDriverWait(driver, 3)
-    elem = wiat.until(EC.presence_of_element_located((By.XPATH, strxpath)))
+    try:
+        wait = WebDriverWait(driver,3)
+        elem = wait.until(EC.presence_of_element_located((By.XPATH, strxpath)))
+    except TimeoutException as ex:
+        print(strxpath)
+        print(ex)
+        return
     src=src+elem.text.replace("/","_")+".pdf"
     elem.click()
-    
     src = re.sub("[()]*", "", src, flags=re.IGNORECASE)
     src = src.replace(" ","_")
     print(src)
     if os.path.isfile(src):
         os.remove(src)
-    #ventana de imprimir 
     original_window = driver.current_window_handle
     pyautogui.hotkey('ctrl', 'p')
-    time.sleep(1)
+    #ventana de imprimir 
     driver.switch_to.window(driver.window_handles[-1])
+    time.sleep(1)
     _extracted_from_imprimir(
         driver
         , '#destinationSettings'
@@ -71,15 +75,13 @@ def imprimir(driver:webdriver.Chrome, src:str, strxpath:str, atras=True):
         , 'div > cr-button.action-button'
     )
     time.sleep(1)
-
     app = Application().connect(class_name="#32770", title='Guardar como')
     SaveAsWin = app.window()
     SaveAsWin.Edit.type_keys(src)
     app.Guardar.Button1.click()
     driver.switch_to.window(original_window)
     if atras:
-        elem = wiat.until(EC.presence_of_element_located((By.CLASS_NAME, 'btnNuevaConsulta')))
-        elem.click()
+        driver.find_element(By.CLASS_NAME, 'btnNuevaConsulta').click()
 
 # TODO Rename this here and in `imprimir`
 def _extracted_from_imprimir(driver, *arg):
@@ -91,15 +93,16 @@ def _extracted_from_imprimir(driver, *arg):
     result.CSSck()
 
 def init_url():
-    url = "https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/FrameCriterioBusquedaWeb.jsp"
+    url = "https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/jcrS00Alias"
+    #url = "https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/FrameCriterioBusquedaWeb.jsp"
     chrome_service = Service(ChromeDriverManager().install())
     #chrome_service = Service(executable_path=r"C:/Users/Lenovo/Downloads/recuperar/web/chromedriver-win64/chromedriver.exe")
-    options = webdriver.ChromeOptions()
+    options = Options()
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
     #options.add_argument('--headless=new')
     driver = webdriver.Chrome(service=chrome_service,options=options)
-    driver.implicitly_wait(20)
+    #driver.implicitly_wait(15)
     driver.get(url)
     #driver.maximize_window()
     return driver
@@ -110,33 +113,38 @@ def buscar(driver:webdriver.Chrome, ruc:str, destino:str, prefijo:str):
         destino = os.path.join(actual,destino)
     if not os.path.exists(destino):
         os.makedirs(destino)
-    elem = driver.find_element(By.ID, 'txtRuc')
-    elem.clear()
-    elem.send_keys(ruc)
-    elem = driver.find_element(By.ID, 'btnAceptar')
-    elem.click()
-    destino = destino+prefijo+ruc+"_"
-    time.sleep(3)
-    
+    n = 0
+    while n < 5:
+        try:
+            elem = driver.find_element(By.ID,'txtRuc')
+            elem.clear()
+            elem.send_keys(ruc)
+            driver.find_element(By.ID,'btnAceptar').click()
+            break
+        except NoSuchElementException as ex:
+            n += 1
+            print(ex)
+            driver.refresh()
+            time.sleep(2)
+
+    wait = WebDriverWait(driver,2)
     try:
-        #Consulta RUC
-        imprimir(driver,destino,'/html/body/div/div[2]/div/div[1]/h1',False)
-
-        #Información Histórica
-        imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[1]/div[1]/form/button')
-
-        #Cantidad de Trabajadores y/o Prestadores de Servicio
-        imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[2]/div[1]/form/button')
-
-        #Representante(s) Legal(es)
-        imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[3]/div[3]/form/button')
-
-        #Establecimiento(s) Anexo(s)
-        imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[4]/div/form/button')
-
-    except TimeoutException as ex:
-        print(ex)
-        driver.find_element(By.CLASS_NAME, 'btnNuevaConsulta').click()
+        if wait.until(EC.alert_is_present()):
+            driver.switch_to.alert.accept()
+            return
+    except TimeoutException:
+        print("sin alerta")
+    destino = destino+prefijo+ruc+"_"
+    #Consulta RUC
+    imprimir(driver,destino,'/html/body/div/div[2]/div/div[1]/h1',False)
+    #Información Histórica
+    imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[1]/div[1]/form/button')
+    #Cantidad de Trabajadores y/o Prestadores de Servicio
+    imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[2]/div[1]/form/button')
+    #Representante(s) Legal(es)
+    imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[3]/div[3]/form/button')
+    #Establecimiento(s) Anexo(s)
+    imprimir(driver,destino,'/html/body/div/div[2]/div/div[5]/div[4]/div/form/button')
 
 @click.command(name='print')
 @click.option('--destino', '-d', default='dest\\empresa10\\', help='Destination for final pdf file')
@@ -151,6 +159,8 @@ def main(file, ruc, destino, prefijo):
                 arg = linea.split("|")
                 print(arg[1])
                 buscar(driver, arg[0], arg[1], prefijo)
+                driver.refresh()
+                time.sleep(2)
     else:
         buscar(driver, ruc, destino, prefijo)
     driver.quit
